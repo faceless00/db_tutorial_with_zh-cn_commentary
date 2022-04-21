@@ -2,7 +2,7 @@ cc=g++
 
 main: main.o
 	$(cc) -o main main.o
-main.o: main.cpp struct.h
+main.o: main.cpp struct.h table.h
 	$(cc) -c main.o main.cpp
 
 .PHONY: clean
