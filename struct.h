@@ -26,3 +26,7 @@ typedef struct {
     Row row_to_insert;  //只有插入语句使用
 } Statement;
 
+typedef enum{
+    EXECUTE_SUCCESS,
+    EXECUTE_TABLE_FULL
+} ExecuteResult;

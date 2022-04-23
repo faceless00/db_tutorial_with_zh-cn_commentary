@@ -2,7 +2,7 @@
 //
 #include "struct.h"
 //
-#define size_of_attribute(Struct,Attribute) sizeof(((Struct* )0)->Attribute)
+#define size_of_attribute(Struct,Attribute) sizeof(((Struct* )0)->Attribute)    //用来计算结构体的成员的大小
 //
 const uint32_t ID_SIZE = size_of_attribute(Row,id);
 const uint32_t USERNAME_SIZE = size_of_attribute(Row,username);
