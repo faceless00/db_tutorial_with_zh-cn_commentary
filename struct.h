@@ -1,4 +1,9 @@
 #include <iostream>
+
+//
+#define byte u_char
+//
+
 #define COLUMN_USERNAME_SIZE 32
 #define COLUMN_EMAIL_SIZE 255
 typedef struct {

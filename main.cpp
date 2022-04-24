@@ -67,7 +67,7 @@ int main(int argc, char* argv[]) {
                 cout<<"Executed."<<endl;
                 break;
             case (EXECUTE_TABLE_FULL):
-                cout<<"Error: Table full"<<endl;
+                cout<<"Error: Table full."<<endl;
                 break;
             default:
                 cout<<"Unrecognized Error."<<endl;
@@ -141,9 +141,9 @@ desc: 序列化行，将行存储到dest指针对应的空间
 ret: 无
 */
 void serialize_row(Row* source, void* destination) {
-    memcpy(destination + ID_OFFSET, &(source->id), ID_SIZE);
-    memcpy(destination + USERNAME_OFFSET, &(source->username), USERNAME_SIZE);
-    memcpy(destination + EMAIL_OFFSET, &(source->email), EMAIL_SIZE);
+    memcpy((byte* )destination + ID_OFFSET, &(source->id), ID_SIZE);
+    memcpy((byte* )destination + USERNAME_OFFSET, &(source->username), USERNAME_SIZE);
+    memcpy((byte* )destination + EMAIL_OFFSET, &(source->email), EMAIL_SIZE);
 }
 /*
 func: deserialize_row
@@ -154,14 +154,14 @@ desc: 反序列化行，将source转化成Row结构体
 ret: 无
 */
 void deserialize_row(void* source, Row* destination) {
-    memcpy(&(destination->id), source + ID_OFFSET, ID_SIZE);
-    memcpy(&(destination->username), source + USERNAME_OFFSET, USERNAME_SIZE);
-    memcpy(&(destination->email), source + EMAIL_OFFSET, EMAIL_SIZE);
+    memcpy(&(destination->id), (byte* )source + ID_OFFSET, ID_SIZE);
+    memcpy(&(destination->username),(byte* ) source + USERNAME_OFFSET, USERNAME_SIZE);
+    memcpy(&(destination->email),(byte* ) source + EMAIL_OFFSET, EMAIL_SIZE);
 }
 
 /*
 func: row_slot
-desc: 给row_num行分配空间，如果page不够，直接分配page,不考虑越界情况
+desc: 定位第row_num行的内存空间，如果page不存在直接分配
 ret: 指针，指向行对应的内存空间
 */
 void* row_slot(Table* table, uint32_t row_num) {
@@ -169,11 +169,11 @@ void* row_slot(Table* table, uint32_t row_num) {
     void* page = table->pages[page_num];
     if (page == NULL) {
         //在内存新分配一页
-        page = table->pages[page_num] = (void*)malloc(sizeof(page));
+        page = table->pages[page_num] = (void* )malloc(sizeof(page));
     }
     uint32_t row_offset = row_num % ROWS_PER_PAGE;  //行在该页的下标
     uint32_t byte_offset = row_offset * ROW_SIZE;   //行在该页的偏移量
-    return page + byte_offset;                      //返回指向行的指针
+    return (void* )((byte* )page + byte_offset);                      //返回指向行的指针
 }
 
 //
@@ -201,12 +201,14 @@ ExecuteResult execute_statement(Statement* statement, Table* table) {
             return execute_insert(statement, table);
         case (STATEMENT_SELECT):
             return execute_select(statement, table);
+        default:
+            return EXECUTE_SUCCESS;
     }
 }
 
 //
 Table* new_table() {
-    Table* table = (Table*)malloc(sizeof(Table));
+    Table* table = (Table* )malloc(sizeof(Table));
     table->num_rows = 0;
     for (uint32_t i = 0; i < TABLE_MAX_PAGES; i++) table->pages[i] = NULL;
     return table;

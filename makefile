@@ -1,9 +1,9 @@
 cc=g++
 
-main: main.o
-	$(cc) -o main main.o
-main.o: main.cpp struct.h table.h
-	$(cc) -c main.o main.cpp
+yourSql: db.o
+	$(cc) -o db db.o
+db.o: main.cpp struct.h table.h
+	$(cc) -c main.cpp -o db.o
 
 .PHONY: clean
 clean:
