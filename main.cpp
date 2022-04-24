@@ -10,11 +10,11 @@ InputBuffer* new_input_buffer();
 void print_prompt();
 void read_input(InputBuffer* input_buffer);
 void close_input_buffer(InputBuffer* input_buffer);
-
+//
 MetaCommandResult do_meta_command(InputBuffer* input_buffer);
 PrepareResult prepare_statement(InputBuffer* input_buffer,
                                 Statement* statement);
-
+PrepareResult prepare_insert(InputBuffer* input_buffer,Statement* statement);
 //
 void serialize_row(Row* source,
                    void* destination);  //序列化数据，结构体->序列化紧凑数据
@@ -33,7 +33,6 @@ void free_table(Table* table);
 int main(int argc, char* argv[]) {
     InputBuffer* input_buffer = new_input_buffer();  //输入缓存
     Table* table = new_table();                      //创建一张表
-    int x = 1;
     while (true) {
         print_prompt();
         read_input(input_buffer);
@@ -52,6 +51,12 @@ int main(int argc, char* argv[]) {
         switch (prepare_statement(input_buffer, &statement)) {
             case (PREPARE_SUCCESS):
                 break;
+            case (PREPARE_NEGATIVE_ID):
+                cout<<"ID must be positive."<<endl;
+                continue;
+            case (PREPARE_STRING_TOO_LONG):
+                cout<<"String is too long."<<endl;
+                continue;
             case (PREPARE_SYNTAX_ERROR):
                 cout << "Syntax error. Could not parse statement." << endl;
                 continue;
@@ -77,35 +82,15 @@ int main(int argc, char* argv[]) {
     return 0;
 }
 
-MetaCommandResult do_meta_command(InputBuffer* input_buffer) {
-    if (strcmp(input_buffer->buffer, ".exit") == 0) {
-        exit(EXIT_SUCCESS);
-    } else {
-        return META_COMMAND_UNRECOGNIZED_COMMAND;
-    }
+// function region
+//
+InputBuffer* new_input_buffer() {
+    InputBuffer* input_buffer = new InputBuffer;
+    input_buffer->buffer = NULL;
+    input_buffer->buffer_length = 0;
+    input_buffer->input_length = 0;
+    return input_buffer;
 }
-
-PrepareResult prepare_statement(InputBuffer* input_buffer,
-                                Statement* statement) {
-    if (strncmp(input_buffer->buffer, "insert", 6) == 0) {
-        statement->type = STATEMENT_INSERT;
-        int args_assigned = sscanf(input_buffer->buffer, "insert %d %s %s",
-                                   &(statement->row_to_insert.id),
-                                   statement->row_to_insert.username,
-                                   statement->row_to_insert.email);
-        if (args_assigned < 3) {
-            return PREPARE_SYNTAX_ERROR;
-        }
-        return PREPARE_SUCCESS;
-    }
-    if (strcmp(input_buffer->buffer, "select") == 0) {
-        statement->type = STATEMENT_SELECT;
-        return PREPARE_SUCCESS;
-    }
-
-    return PREPARE_UNRECOGNIZED_STATEMENT;
-}
-
 void close_input_buffer(InputBuffer* input_buffer) {
     free(input_buffer->buffer);  //显然,是用堆分配的空间
     free(input_buffer);
@@ -126,14 +111,51 @@ void read_input(InputBuffer* input_buffer) {
 }
 
 void print_prompt() { cout << "db > "; }
-
-InputBuffer* new_input_buffer() {
-    InputBuffer* input_buffer = new InputBuffer;
-    input_buffer->buffer = NULL;
-    input_buffer->buffer_length = 0;
-    input_buffer->input_length = 0;
-    return input_buffer;
+//
+MetaCommandResult do_meta_command(InputBuffer* input_buffer) {
+    if (strcmp(input_buffer->buffer, ".exit") == 0) {
+        exit(EXIT_SUCCESS);
+    } else {
+        return META_COMMAND_UNRECOGNIZED_COMMAND;
+    }
 }
+
+PrepareResult prepare_statement(InputBuffer* input_buffer,
+                                Statement* statement) {
+    if (strncmp(input_buffer->buffer, "insert", 6) == 0) {
+        statement->type = STATEMENT_INSERT;
+        return prepare_insert(input_buffer,statement);
+    }
+    if (strcmp(input_buffer->buffer, "select") == 0) {
+        statement->type = STATEMENT_SELECT;
+        return PREPARE_SUCCESS;
+    }
+
+    return PREPARE_UNRECOGNIZED_STATEMENT;
+}
+
+PrepareResult prepare_insert(InputBuffer* input_buffer,Statement* statement){
+    statement->type=STATEMENT_INSERT;
+    char* keyword=strtok(input_buffer->buffer," "); //其实是insert字符串
+    char* id_string=strtok(NULL," ");
+    char* username=strtok(NULL," ");
+    char* email=strtok(NULL," ");
+    if (id_string==NULL || username==NULL || email==NULL){
+        return PREPARE_SYNTAX_ERROR;
+    }
+    int id=atoi(id_string);
+    if (id<0)
+        return PREPARE_NEGATIVE_ID;
+    if (strlen(username)>COLUMN_USERNAME_SIZE || strlen(email)>COLUMN_EMAIL_SIZE)
+        return PREPARE_STRING_TOO_LONG;
+    statement->row_to_insert.id=id;
+    strcpy(statement->row_to_insert.username,username);
+    strcpy(statement->row_to_insert.email,email);
+    return PREPARE_SUCCESS;
+}
+
+//
+
 /*
 func: serialize_row
 desc: 序列化行，将行存储到dest指针对应的空间
@@ -224,3 +246,6 @@ void print_row(Row* row) {
     cout << "(" << row->id << ", " << row->username << ", " << row->email << ")"
          << endl;
 }
+
+//
+// func region END

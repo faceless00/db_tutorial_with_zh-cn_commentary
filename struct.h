@@ -1,5 +1,5 @@
 #include <iostream>
-
+#define STRUCT_DEF 1
 //
 #define byte u_char
 //
@@ -8,8 +8,8 @@
 #define COLUMN_EMAIL_SIZE 255
 typedef struct {
     uint32_t id;
-    char username[COLUMN_USERNAME_SIZE];
-    char email[COLUMN_EMAIL_SIZE];
+    char username[COLUMN_USERNAME_SIZE+1];
+    char email[COLUMN_EMAIL_SIZE+1];
 } Row;
 typedef struct {
     char* buffer;
@@ -22,7 +22,7 @@ typedef enum {
     META_COMMAND_UNRECOGNIZED_COMMAND
 } MetaCommandResult;
 
-typedef enum { PREPARE_SUCCESS, PREPARE_UNRECOGNIZED_STATEMENT,PREPARE_SYNTAX_ERROR } PrepareResult;
+typedef enum { PREPARE_SUCCESS, PREPARE_NEGATIVE_ID,PREPARE_STRING_TOO_LONG,PREPARE_UNRECOGNIZED_STATEMENT,PREPARE_SYNTAX_ERROR } PrepareResult;
 
 typedef enum { STATEMENT_INSERT, STATEMENT_SELECT } StatementType;
 
@@ -35,3 +35,7 @@ typedef enum{
     EXECUTE_SUCCESS,
     EXECUTE_TABLE_FULL
 } ExecuteResult;
+
+// pageSize tableMaxPages
+const uint32_t PAGE_SIZE=4096;  //每页4096字节
+#define TABLE_MAX_PAGES 100 //表中最多存储100页
