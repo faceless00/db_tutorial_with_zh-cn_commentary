@@ -22,21 +22,21 @@ void deserialize_row(void* source,
                      Row* destination);  //逆序列化紧凑数据->结构体
 void* row_slot(Table* table,
                uint32_t row_num);  //返回指向该行的指针，如果页不存在，分配新页
-void print_row(Row* row);   //打印一行数据
-ExecuteResult execute_insert(Statement* statement,Table* table);
-ExecuteResult execute_select(Statement* statement,Table* table);
-ExecuteResult execute_statement(Statement* statement,Table* table);
+void print_row(Row* row);  //打印一行数据
+ExecuteResult execute_insert(Statement* statement, Table* table);
+ExecuteResult execute_select(Statement* statement, Table* table);
+ExecuteResult execute_statement(Statement* statement, Table* table);
 //
 Table* new_table();
 void free_table(Table* table);
 //
 int main(int argc, char* argv[]) {
-    InputBuffer* input_buffer = new_input_buffer(); //输入缓存
-    Table* table=new_table();   //创建一张表
+    InputBuffer* input_buffer = new_input_buffer();  //输入缓存
+    Table* table = new_table();                      //创建一张表
+    int x = 1;
     while (true) {
         print_prompt();
         read_input(input_buffer);
-
         // 每一个case都要continue,这样不会执行后面的语句，直接进入下一次while
         if (input_buffer->buffer[0] == '.') {
             switch (do_meta_command(input_buffer)) {
@@ -53,7 +53,7 @@ int main(int argc, char* argv[]) {
             case (PREPARE_SUCCESS):
                 break;
             case (PREPARE_SYNTAX_ERROR):
-                cout<<"Syntax error. Could not parse statement."<<endl;
+                cout << "Syntax error. Could not parse statement." << endl;
                 continue;
             case (PREPARE_UNRECOGNIZED_STATEMENT):  //非inert&select
                 cout << "Unrecognized keyword at start of: "
@@ -62,15 +62,15 @@ int main(int argc, char* argv[]) {
             default:
                 continue;
         }
-        switch (execute_statement(&statement,table)){
+        switch (execute_statement(&statement, table)) {
             case (EXECUTE_SUCCESS):
-                cout<<"Executed."<<endl;
+                cout << "Executed." << endl;
                 break;
             case (EXECUTE_TABLE_FULL):
-                cout<<"Error: Table full."<<endl;
+                cout << "Error: Table full." << endl;
                 break;
             default:
-                cout<<"Unrecognized Error."<<endl;
+                cout << "Unrecognized Error." << endl;
                 break;
         }
     }
@@ -114,7 +114,6 @@ void close_input_buffer(InputBuffer* input_buffer) {
 void read_input(InputBuffer* input_buffer) {
     ssize_t bytes_read =
         getline(&(input_buffer->buffer), &(input_buffer->buffer_length), stdin);
-
     if (bytes_read <= 0) {
         printf("Error reading input\n");
         exit(EXIT_FAILURE);  // define EXIT_FAILURE 1
@@ -141,9 +140,10 @@ desc: 序列化行，将行存储到dest指针对应的空间
 ret: 无
 */
 void serialize_row(Row* source, void* destination) {
-    memcpy((byte* )destination + ID_OFFSET, &(source->id), ID_SIZE);
-    memcpy((byte* )destination + USERNAME_OFFSET, &(source->username), USERNAME_SIZE);
-    memcpy((byte* )destination + EMAIL_OFFSET, &(source->email), EMAIL_SIZE);
+    memcpy((byte*)destination + ID_OFFSET, &(source->id), ID_SIZE);
+    memcpy((byte*)destination + USERNAME_OFFSET, &(source->username),
+           USERNAME_SIZE);
+    memcpy((byte*)destination + EMAIL_OFFSET, &(source->email), EMAIL_SIZE);
 }
 /*
 func: deserialize_row
@@ -154,9 +154,10 @@ desc: 反序列化行，将source转化成Row结构体
 ret: 无
 */
 void deserialize_row(void* source, Row* destination) {
-    memcpy(&(destination->id), (byte* )source + ID_OFFSET, ID_SIZE);
-    memcpy(&(destination->username),(byte* ) source + USERNAME_OFFSET, USERNAME_SIZE);
-    memcpy(&(destination->email),(byte* ) source + EMAIL_OFFSET, EMAIL_SIZE);
+    memcpy(&(destination->id), (byte*)source + ID_OFFSET, ID_SIZE);
+    memcpy(&(destination->username), (byte*)source + USERNAME_OFFSET,
+           USERNAME_SIZE);
+    memcpy(&(destination->email), (byte*)source + EMAIL_OFFSET, EMAIL_SIZE);
 }
 
 /*
@@ -169,11 +170,11 @@ void* row_slot(Table* table, uint32_t row_num) {
     void* page = table->pages[page_num];
     if (page == NULL) {
         //在内存新分配一页
-        page = table->pages[page_num] = (void* )malloc(sizeof(page));
+        page = table->pages[page_num] = malloc(PAGE_SIZE);
     }
     uint32_t row_offset = row_num % ROWS_PER_PAGE;  //行在该页的下标
     uint32_t byte_offset = row_offset * ROW_SIZE;   //行在该页的偏移量
-    return (void* )((byte* )page + byte_offset);                      //返回指向行的指针
+    return (void* )((byte*)page + byte_offset);      //返回指向行的指针
 }
 
 //
@@ -208,19 +209,18 @@ ExecuteResult execute_statement(Statement* statement, Table* table) {
 
 //
 Table* new_table() {
-    Table* table = (Table* )malloc(sizeof(Table));
+    Table* table = (Table*)malloc(sizeof(Table));
     table->num_rows = 0;
     for (uint32_t i = 0; i < TABLE_MAX_PAGES; i++) table->pages[i] = NULL;
     return table;
 }
 
-void free_table(Table* table){
-    for (uint32_t i=0;i<TABLE_MAX_PAGES;i++)
-        free(table->pages[i]);
+void free_table(Table* table) {
+    for (uint32_t i = 0; i < TABLE_MAX_PAGES; i++) free(table->pages[i]);
     free(table);
 }
 
-void print_row(Row* row){
-    cout<<"("<<row->id<<", "<<row->username
-    <<", "<<row->email<<")"<<endl;
+void print_row(Row* row) {
+    cout << "(" << row->id << ", " << row->username << ", " << row->email << ")"
+         << endl;
 }
