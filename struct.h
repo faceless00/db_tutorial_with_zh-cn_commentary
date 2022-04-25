@@ -1,41 +1,39 @@
 #include <iostream>
-#define STRUCT_DEF 1
 //
-#define byte u_char
+#ifndef DEF_DEF
+#include "def.h"
+#endif
 //
 
-#define COLUMN_USERNAME_SIZE 32
-#define COLUMN_EMAIL_SIZE 255
+// Row & Table & Page macros(size offset .etc)
+#define size_of_attribute(Struct, Attribute) sizeof(((Struct* )0)->Attribute)  //用来计算结构体的成员的大小
+// Row
+const uint32_t ID_SIZE = size_of_attribute(Row, id);
+const uint32_t USERNAME_SIZE = size_of_attribute(Row, username);
+const uint32_t EMAIL_SIZE = size_of_attribute(Row, email);
+const uint32_t ID_OFFSET = 0;
+const uint32_t USERNAME_OFFSET = ID_OFFSET + ID_SIZE;
+const uint32_t EMAIL_OFFSET = USERNAME_OFFSET + USERNAME_SIZE;
+const uint32_t ROW_SIZE = ID_SIZE + USERNAME_SIZE + EMAIL_SIZE;
+// Table
+const uint32_t PAGE_SIZE = 4096;  //每页4096字节
+#define TABLE_MAX_PAGES 100       //表中最多存储100页
+// Page
+const uint32_t ROWS_PER_PAGE = PAGE_SIZE / ROW_SIZE;  //每页行数,向下取整
+const uint32_t TABLE_MAX_ROWS = ROWS_PER_PAGE * TABLE_MAX_PAGES;  //页不一定刚好被行塞满
+// END
+
+// Pager
 typedef struct {
-    uint32_t id;
-    char username[COLUMN_USERNAME_SIZE+1];
-    char email[COLUMN_EMAIL_SIZE+1];
-} Row;
+    int file_descriptor;
+    uint32_t file_length;
+    void* pages[TABLE_MAX_PAGES];
+} Pager;
+
+// Table
 typedef struct {
-    char* buffer;
-    size_t buffer_length;
-    ssize_t input_length;
-} InputBuffer;
+    uint32_t num_rows;  //待插入的行的下标，相当于总行数
+    Pager* pager;
+} Table;
 
-typedef enum {
-    META_COMMAND_SUCCESS,
-    META_COMMAND_UNRECOGNIZED_COMMAND
-} MetaCommandResult;
-
-typedef enum { PREPARE_SUCCESS, PREPARE_NEGATIVE_ID,PREPARE_STRING_TOO_LONG,PREPARE_UNRECOGNIZED_STATEMENT,PREPARE_SYNTAX_ERROR } PrepareResult;
-
-typedef enum { STATEMENT_INSERT, STATEMENT_SELECT } StatementType;
-
-typedef struct {
-    StatementType type;
-    Row row_to_insert;  //只有插入语句使用
-} Statement;
-
-typedef enum{
-    EXECUTE_SUCCESS,
-    EXECUTE_TABLE_FULL
-} ExecuteResult;
-
-// pageSize tableMaxPages
-const uint32_t PAGE_SIZE=4096;  //每页4096字节
-#define TABLE_MAX_PAGES 100 //表中最多存储100页
+// END

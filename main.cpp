@@ -1,8 +1,11 @@
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <cstdio>
 #include <cstring>
 #include <iostream>
 //
-#include "table.h"
+#include "struct.h"
 //
 using namespace std;
 
@@ -11,11 +14,11 @@ void print_prompt();
 void read_input(InputBuffer* input_buffer);
 void close_input_buffer(InputBuffer* input_buffer);
 //
-MetaCommandResult do_meta_command(InputBuffer* input_buffer);
+MetaCommandResult do_meta_command(InputBuffer* input_buffer, Table* table);
 PrepareResult prepare_statement(InputBuffer* input_buffer,
                                 Statement* statement);
-PrepareResult prepare_insert(InputBuffer* input_buffer,Statement* statement);
-//
+PrepareResult prepare_insert(InputBuffer* input_buffer, Statement* statement);
+// row nav,serialize
 void serialize_row(Row* source,
                    void* destination);  //序列化数据，结构体->序列化紧凑数据
 void deserialize_row(void* source,
@@ -23,22 +26,36 @@ void deserialize_row(void* source,
 void* row_slot(Table* table,
                uint32_t row_num);  //返回指向该行的指针，如果页不存在，分配新页
 void print_row(Row* row);  //打印一行数据
+// directive func
 ExecuteResult execute_insert(Statement* statement, Table* table);
 ExecuteResult execute_select(Statement* statement, Table* table);
 ExecuteResult execute_statement(Statement* statement, Table* table);
+// pager
+Pager* pager_open(const char* filename);
+Table* db_open(const char* filename);
+void db_close(Table* table);
+void* get_page(Pager* pager, uint32_t page_num);
+void pager_flush(Pager* pager, uint32_t page_num, uint32_t size);
 //
-Table* new_table();
-void free_table(Table* table);
-//
+
+// Main func
 int main(int argc, char* argv[]) {
+    if (argc<2){
+        cout<<"Must supply a database filename."<<endl;
+        exit(EXIT_FAILURE);
+    }
+
+    char* filename=argv[1];
+    Table* table=db_open(filename); //连接数据库，返回值是一张表
+
     InputBuffer* input_buffer = new_input_buffer();  //输入缓存
-    Table* table = new_table();                      //创建一张表
+    
     while (true) {
         print_prompt();
         read_input(input_buffer);
         // 每一个case都要continue,这样不会执行后面的语句，直接进入下一次while
         if (input_buffer->buffer[0] == '.') {
-            switch (do_meta_command(input_buffer)) {
+            switch (do_meta_command(input_buffer, table)) {
                 case (META_COMMAND_SUCCESS):
                     continue;
                 case (META_COMMAND_UNRECOGNIZED_COMMAND):
@@ -52,10 +69,10 @@ int main(int argc, char* argv[]) {
             case (PREPARE_SUCCESS):
                 break;
             case (PREPARE_NEGATIVE_ID):
-                cout<<"ID must be positive."<<endl;
+                cout << "ID must be positive." << endl;
                 continue;
             case (PREPARE_STRING_TOO_LONG):
-                cout<<"String is too long."<<endl;
+                cout << "String is too long." << endl;
                 continue;
             case (PREPARE_SYNTAX_ERROR):
                 cout << "Syntax error. Could not parse statement." << endl;
@@ -81,9 +98,10 @@ int main(int argc, char* argv[]) {
     }
     return 0;
 }
+//
 
 // function region
-//
+
 InputBuffer* new_input_buffer() {
     InputBuffer* input_buffer = new InputBuffer;
     input_buffer->buffer = NULL;
@@ -112,8 +130,9 @@ void read_input(InputBuffer* input_buffer) {
 
 void print_prompt() { cout << "db > "; }
 //
-MetaCommandResult do_meta_command(InputBuffer* input_buffer) {
+MetaCommandResult do_meta_command(InputBuffer* input_buffer, Table* table) {
     if (strcmp(input_buffer->buffer, ".exit") == 0) {
+        db_close(table);
         exit(EXIT_SUCCESS);
     } else {
         return META_COMMAND_UNRECOGNIZED_COMMAND;
@@ -124,7 +143,7 @@ PrepareResult prepare_statement(InputBuffer* input_buffer,
                                 Statement* statement) {
     if (strncmp(input_buffer->buffer, "insert", 6) == 0) {
         statement->type = STATEMENT_INSERT;
-        return prepare_insert(input_buffer,statement);
+        return prepare_insert(input_buffer, statement);
     }
     if (strcmp(input_buffer->buffer, "select") == 0) {
         statement->type = STATEMENT_SELECT;
@@ -134,28 +153,33 @@ PrepareResult prepare_statement(InputBuffer* input_buffer,
     return PREPARE_UNRECOGNIZED_STATEMENT;
 }
 
-PrepareResult prepare_insert(InputBuffer* input_buffer,Statement* statement){
-    statement->type=STATEMENT_INSERT;
-    char* keyword=strtok(input_buffer->buffer," "); //其实是insert字符串
-    char* id_string=strtok(NULL," ");
-    char* username=strtok(NULL," ");
-    char* email=strtok(NULL," ");
-    if (id_string==NULL || username==NULL || email==NULL){
+PrepareResult prepare_insert(InputBuffer* input_buffer, Statement* statement) {
+    statement->type = STATEMENT_INSERT;
+    char* keyword = strtok(input_buffer->buffer, " ");  //其实是insert字符串
+    char* id_string = strtok(NULL, " ");
+    char* username = strtok(NULL, " ");
+    char* email = strtok(NULL, " ");
+    if (id_string == NULL || username == NULL || email == NULL) {
         return PREPARE_SYNTAX_ERROR;
     }
-    int id=atoi(id_string);
-    if (id<0)
+    int id = atoi(id_string);
+    if (id < 0)
         return PREPARE_NEGATIVE_ID;
-    if (strlen(username)>COLUMN_USERNAME_SIZE || strlen(email)>COLUMN_EMAIL_SIZE)
+    if (strlen(username) > COLUMN_USERNAME_SIZE ||
+        strlen(email) > COLUMN_EMAIL_SIZE)
         return PREPARE_STRING_TOO_LONG;
-    statement->row_to_insert.id=id;
-    strcpy(statement->row_to_insert.username,username);
-    strcpy(statement->row_to_insert.email,email);
+    statement->row_to_insert.id = id;
+    strcpy(statement->row_to_insert.username, username);
+    strcpy(statement->row_to_insert.email, email);
     return PREPARE_SUCCESS;
 }
 
 //
-
+// well this func just print a row
+void print_row(Row* row) {
+    cout << "(" << row->id << ", " << row->username << ", " << row->email << ")"
+         << endl;
+}
 /*
 func: serialize_row
 desc: 序列化行，将行存储到dest指针对应的空间
@@ -163,9 +187,9 @@ ret: 无
 */
 void serialize_row(Row* source, void* destination) {
     memcpy((byte*)destination + ID_OFFSET, &(source->id), ID_SIZE);
-    memcpy((byte*)destination + USERNAME_OFFSET, &(source->username),
+    strncpy((char* )destination + USERNAME_OFFSET, (char* )&(source->username),
            USERNAME_SIZE);
-    memcpy((byte*)destination + EMAIL_OFFSET, &(source->email), EMAIL_SIZE);
+    strncpy((char* )destination + EMAIL_OFFSET, (char* )&(source->email), EMAIL_SIZE);
 }
 /*
 func: deserialize_row
@@ -189,17 +213,13 @@ ret: 指针，指向行对应的内存空间
 */
 void* row_slot(Table* table, uint32_t row_num) {
     uint32_t page_num = row_num / ROWS_PER_PAGE;
-    void* page = table->pages[page_num];
-    if (page == NULL) {
-        //在内存新分配一页
-        page = table->pages[page_num] = malloc(PAGE_SIZE);
-    }
+    void* page = get_page(table->pager, page_num);
     uint32_t row_offset = row_num % ROWS_PER_PAGE;  //行在该页的下标
     uint32_t byte_offset = row_offset * ROW_SIZE;   //行在该页的偏移量
-    return (void* )((byte*)page + byte_offset);      //返回指向行的指针
+    return (void*)((byte*)page + byte_offset);      //返回指向行的指针
 }
 
-//
+// insert select ...
 
 ExecuteResult execute_insert(Statement* statement, Table* table) {
     if (table->num_rows >= TABLE_MAX_ROWS) {  // table放不下了
@@ -229,23 +249,149 @@ ExecuteResult execute_statement(Statement* statement, Table* table) {
     }
 }
 
-//
-Table* new_table() {
+// database mem manage
+
+Table* db_open(const char* filename) {
+    Pager* pager = pager_open(filename);
+    // uint32_t num_rows = pager->file_length / ROW_SIZE; this is wrong!!因为page的大小不一定刚好是Row大小的整数倍
+    uint32_t num_rows=pager->file_length/PAGE_SIZE*ROWS_PER_PAGE;   //整页的所有行
+
+    uint32_t extra_bytes=pager->file_length%PAGE_SIZE;
+    if (extra_bytes>0){    //残缺页的额外行
+        uint32_t addtional_rows=extra_bytes/ROW_SIZE;
+        num_rows+=addtional_rows;
+    }
     Table* table = (Table*)malloc(sizeof(Table));
-    table->num_rows = 0;
-    for (uint32_t i = 0; i < TABLE_MAX_PAGES; i++) table->pages[i] = NULL;
+    table->pager = pager;
+    table->num_rows = num_rows;
     return table;
 }
 
-void free_table(Table* table) {
-    for (uint32_t i = 0; i < TABLE_MAX_PAGES; i++) free(table->pages[i]);
+Pager* pager_open(const char* filename) {
+    int fd = open(filename,
+                  O_RDWR |      //读写模式
+                      O_CREAT,  //不存在则新建
+                  S_IWUSR |     //用户写入权限
+                      S_IRUSR   //用户读取权限
+    );
+    if (fd == -1) {
+        cout << "Unable to open file" << endl;
+        exit(EXIT_FAILURE);
+    }
+    off_t file_length = lseek(fd, 0, SEEK_END);
+
+    Pager* pager = (Pager*)malloc(sizeof(Pager));
+    pager->file_descriptor = fd;
+    pager->file_length = file_length;
+
+    for (uint32_t i = 0; i < TABLE_MAX_PAGES; i++) pager->pages[i] = NULL;
+    return pager;
+}
+
+/*
+func: get_page
+params: pager-页对象 page_num-页的下标
+desc: 获取下标为page_num的页
+ret: 指向该页的指针
+*/
+void* get_page(Pager* pager, uint32_t page_num) {
+    if (page_num >= TABLE_MAX_PAGES) {
+        cout << "Tried to fetch page number out of bounds. " << page_num + 1
+             << " > " << TABLE_MAX_PAGES << endl;
+        exit(EXIT_FAILURE);
+    }
+    if (pager->pages[page_num] == NULL) {
+        //缓存未命中，分配内存然后从文件中读取
+        void* page = malloc(PAGE_SIZE);
+        uint32_t num_pages = pager->file_length / PAGE_SIZE;  //总页数
+
+        if (pager->file_length % PAGE_SIZE)  //最后一页没填满
+            num_pages++;  //因为是向下取整，所以加上少加的那页
+        // 或者直接: uint32_t
+        // num_pages=(pager->file_length%PAGE_SIZE==0)?pager->file_length/PAGE_SIZE:pager->file_length/PAGE_SIZE+1
+
+        if (page_num <= num_pages - 1) {    // 如果请求的页在数据库文件中，就读取到内存
+            lseek(pager->file_descriptor, page_num * PAGE_SIZE, SEEK_SET);
+            ssize_t bytes_read = read(pager->file_descriptor, page, PAGE_SIZE);
+            if (bytes_read == -1) {
+                cout << "Error reading file: " << errno << endl;
+                exit(EXIT_FAILURE);
+            }
+        }
+        pager->pages[page_num] = page;
+    }
+    return pager->pages[page_num];
+}
+
+/*
+func: db_close
+param: table{num_rows; //待插入的行的下标，相当于总行数 pager;}
+desc: 关闭数据库，将页写入数据库文件，释放空间
+*/
+void db_close(Table* table) {
+    Pager* pager = table->pager;
+    uint32_t num_full_pages = table->num_rows / ROWS_PER_PAGE;
+    for (uint32_t i = 0; i < num_full_pages; i++) {  //写入被填满的页
+        if (pager->pages[i] == NULL)
+            continue;
+        pager_flush(pager, i, PAGE_SIZE);
+        free(pager->pages[i]);
+        pager->pages[i] = NULL;
+    }
+    // 可能有额外一页(未被写满的页)需要写入文件末尾
+    // 在我们切换到B-tree后就不需要做这个了
+    uint32_t num_addtional_rows = table->num_rows % ROWS_PER_PAGE;
+    if (num_addtional_rows > 0) {
+        uint32_t page_num = num_full_pages;  //多出来的一页的下标
+        if (pager->pages[page_num] != NULL) {
+            pager_flush(
+                pager, page_num,
+                num_addtional_rows * ROW_SIZE);  //该页大小为num_rows*row_size
+            free(pager->pages[page_num]);
+            pager->pages[page_num] = NULL;
+        }
+    }
+    int result = close(pager->file_descriptor);
+    if (result == -1) {
+        cout << "Error closing db file." << endl;
+        exit(EXIT_FAILURE);
+    }
+    for (uint32_t i = 0; i < TABLE_MAX_PAGES; i++) {  // check
+        void* page = pager->pages[i];
+        if (page) {
+            free(page);
+            pager->pages[i] = NULL;
+        }
+    }
+    free(pager);
     free(table);
 }
 
-void print_row(Row* row) {
-    cout << "(" << row->id << ", " << row->username << ", " << row->email << ")"
-         << endl;
-}
 
+/*
+func: pager_flush
+params: pager   page_num-页的下标   size-页的大小
+desc: 向数据库文件中向第page_num对应的偏移处写入size个字节
+*/
+void pager_flush(Pager* pager, uint32_t page_num, uint32_t size) {
+    if (pager->pages[page_num] == NULL) {
+        cout<<"Tried to flush null page"<<endl;
+        exit(EXIT_FAILURE);
+    }
+    
+    off_t offset=lseek(pager->file_descriptor,page_num*PAGE_SIZE,SEEK_SET);
+    
+    if (offset==-1){
+        cout<<"Error seeking: "<<errno<<endl;
+        exit(EXIT_FAILURE);
+    }
+
+    ssize_t bytes_written=write(pager->file_descriptor,pager->pages[page_num],size);
+
+    if (bytes_written ==-1){
+        cout<<"Error writing: "<<errno<<endl;
+        exit(EXIT_FAILURE);
+    }
+}
 //
 // func region END
