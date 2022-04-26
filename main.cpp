@@ -18,13 +18,11 @@ MetaCommandResult do_meta_command(InputBuffer* input_buffer, Table* table);
 PrepareResult prepare_statement(InputBuffer* input_buffer,
                                 Statement* statement);
 PrepareResult prepare_insert(InputBuffer* input_buffer, Statement* statement);
-// row nav,serialize
+// Row serialize & print
 void serialize_row(Row* source,
                    void* destination);  //序列化数据，结构体->序列化紧凑数据
 void deserialize_row(void* source,
                      Row* destination);  //逆序列化紧凑数据->结构体
-void* row_slot(Table* table,
-               uint32_t row_num);  //返回指向该行的指针，如果页不存在，分配新页
 void print_row(Row* row);  //打印一行数据
 // directive func
 ExecuteResult execute_insert(Statement* statement, Table* table);
@@ -36,20 +34,25 @@ Table* db_open(const char* filename);
 void db_close(Table* table);
 void* get_page(Pager* pager, uint32_t page_num);
 void pager_flush(Pager* pager, uint32_t page_num, uint32_t size);
+// cursor
+Cursor* table_start(Table* table);
+Cursor* table_end(Table* table);
+void* cursor_value(Cursor* cursor);
+void cursor_advance(Cursor* cursor);
 //
 
 // Main func
 int main(int argc, char* argv[]) {
-    if (argc<2){
-        cout<<"Must supply a database filename."<<endl;
+    if (argc < 2) {
+        cout << "Must supply a database filename." << endl;
         exit(EXIT_FAILURE);
     }
 
-    char* filename=argv[1];
-    Table* table=db_open(filename); //连接数据库，返回值是一张表
+    char* filename = argv[1];
+    Table* table = db_open(filename);  //连接数据库，返回值是一张表
 
     InputBuffer* input_buffer = new_input_buffer();  //输入缓存
-    
+
     while (true) {
         print_prompt();
         read_input(input_buffer);
@@ -187,9 +190,10 @@ ret: 无
 */
 void serialize_row(Row* source, void* destination) {
     memcpy((byte*)destination + ID_OFFSET, &(source->id), ID_SIZE);
-    strncpy((char* )destination + USERNAME_OFFSET, (char* )&(source->username),
-           USERNAME_SIZE);
-    strncpy((char* )destination + EMAIL_OFFSET, (char* )&(source->email), EMAIL_SIZE);
+    strncpy((char*)destination + USERNAME_OFFSET, (char*)&(source->username),
+            USERNAME_SIZE);
+    strncpy((char*)destination + EMAIL_OFFSET, (char*)&(source->email),
+            EMAIL_SIZE);
 }
 /*
 func: deserialize_row
@@ -206,19 +210,6 @@ void deserialize_row(void* source, Row* destination) {
     memcpy(&(destination->email), (byte*)source + EMAIL_OFFSET, EMAIL_SIZE);
 }
 
-/*
-func: row_slot
-desc: 定位第row_num行的内存空间，如果page不存在直接分配
-ret: 指针，指向行对应的内存空间
-*/
-void* row_slot(Table* table, uint32_t row_num) {
-    uint32_t page_num = row_num / ROWS_PER_PAGE;
-    void* page = get_page(table->pager, page_num);
-    uint32_t row_offset = row_num % ROWS_PER_PAGE;  //行在该页的下标
-    uint32_t byte_offset = row_offset * ROW_SIZE;   //行在该页的偏移量
-    return (void*)((byte*)page + byte_offset);      //返回指向行的指针
-}
-
 // insert select ...
 
 ExecuteResult execute_insert(Statement* statement, Table* table) {
@@ -226,16 +217,27 @@ ExecuteResult execute_insert(Statement* statement, Table* table) {
         return EXECUTE_TABLE_FULL;
     }
     Row* row_to_insert = &(statement->row_to_insert);
-    serialize_row(row_to_insert, row_slot(table, table->num_rows));
+
+    Cursor* cursor=table_end(table);
+
+    serialize_row(row_to_insert,cursor_value(cursor));
     table->num_rows += 1;
+    free(cursor); //cursor是malloc分配的,要记得free
+
     return EXECUTE_SUCCESS;
 }
 ExecuteResult execute_select(Statement* statement, Table* table) {
     Row row;
+    Cursor* cursor=table_start(table);
+
     for (uint32_t i = 0; i < table->num_rows; i++) {
-        deserialize_row(row_slot(table, i), &row);
+        deserialize_row(cursor_value(cursor), &row);
+        cursor_advance(cursor);
         print_row(&row);
     }
+
+    free(cursor); //cursor是用malloc分配的,不要忘了free.
+
     return EXECUTE_SUCCESS;
 }
 ExecuteResult execute_statement(Statement* statement, Table* table) {
@@ -253,13 +255,15 @@ ExecuteResult execute_statement(Statement* statement, Table* table) {
 
 Table* db_open(const char* filename) {
     Pager* pager = pager_open(filename);
-    // uint32_t num_rows = pager->file_length / ROW_SIZE; this is wrong!!因为page的大小不一定刚好是Row大小的整数倍
-    uint32_t num_rows=pager->file_length/PAGE_SIZE*ROWS_PER_PAGE;   //整页的所有行
+    // uint32_t num_rows = pager->file_length / ROW_SIZE; this is
+    // wrong!!因为page的大小不一定刚好是Row大小的整数倍
+    uint32_t num_rows =
+        pager->file_length / PAGE_SIZE * ROWS_PER_PAGE;  //整页的所有行
 
-    uint32_t extra_bytes=pager->file_length%PAGE_SIZE;
-    if (extra_bytes>0){    //残缺页的额外行
-        uint32_t addtional_rows=extra_bytes/ROW_SIZE;
-        num_rows+=addtional_rows;
+    uint32_t extra_bytes = pager->file_length % PAGE_SIZE;
+    if (extra_bytes > 0) {  //残缺页的额外行
+        uint32_t addtional_rows = extra_bytes / ROW_SIZE;
+        num_rows += addtional_rows;
     }
     Table* table = (Table*)malloc(sizeof(Table));
     table->pager = pager;
@@ -310,7 +314,8 @@ void* get_page(Pager* pager, uint32_t page_num) {
         // 或者直接: uint32_t
         // num_pages=(pager->file_length%PAGE_SIZE==0)?pager->file_length/PAGE_SIZE:pager->file_length/PAGE_SIZE+1
 
-        if (page_num <= num_pages - 1) {    // 如果请求的页在数据库文件中，就读取到内存
+        if (page_num <=
+            num_pages - 1) {  // 如果请求的页在数据库文件中，就读取到内存
             lseek(pager->file_descriptor, page_num * PAGE_SIZE, SEEK_SET);
             ssize_t bytes_read = read(pager->file_descriptor, page, PAGE_SIZE);
             if (bytes_read == -1) {
@@ -333,12 +338,12 @@ void db_close(Table* table) {
     uint32_t num_full_pages = table->num_rows / ROWS_PER_PAGE;
     for (uint32_t i = 0; i < num_full_pages; i++) {  //写入被填满的页
         if (pager->pages[i] == NULL)
-            continue;
+            continue;  //如果页没有读取到内存，说明该页数据没有改动，跳过此页
         pager_flush(pager, i, PAGE_SIZE);
         free(pager->pages[i]);
         pager->pages[i] = NULL;
     }
-    // 可能有额外一页(未被写满的页)需要写入文件末尾
+    // 可能有额外一页(行数不满ROWS_PER_PAGE的页)需要写入文件末尾
     // 在我们切换到B-tree后就不需要做这个了
     uint32_t num_addtional_rows = table->num_rows % ROWS_PER_PAGE;
     if (num_addtional_rows > 0) {
@@ -358,7 +363,7 @@ void db_close(Table* table) {
     }
     for (uint32_t i = 0; i < TABLE_MAX_PAGES; i++) {  // check
         void* page = pager->pages[i];
-        if (page) {
+        if (page != NULL) {
             free(page);
             pager->pages[i] = NULL;
         }
@@ -367,7 +372,6 @@ void db_close(Table* table) {
     free(table);
 }
 
-
 /*
 func: pager_flush
 params: pager   page_num-页的下标   size-页的大小
@@ -375,23 +379,81 @@ desc: 向数据库文件中向第page_num对应的偏移处写入size个字节
 */
 void pager_flush(Pager* pager, uint32_t page_num, uint32_t size) {
     if (pager->pages[page_num] == NULL) {
-        cout<<"Tried to flush null page"<<endl;
-        exit(EXIT_FAILURE);
-    }
-    
-    off_t offset=lseek(pager->file_descriptor,page_num*PAGE_SIZE,SEEK_SET);
-    
-    if (offset==-1){
-        cout<<"Error seeking: "<<errno<<endl;
+        cout << "Tried to flush null page" << endl;
         exit(EXIT_FAILURE);
     }
 
-    ssize_t bytes_written=write(pager->file_descriptor,pager->pages[page_num],size);
+    off_t offset =
+        lseek(pager->file_descriptor, page_num * PAGE_SIZE, SEEK_SET);
 
-    if (bytes_written ==-1){
-        cout<<"Error writing: "<<errno<<endl;
+    if (offset == -1) {
+        cout << "Error seeking: " << errno << endl;
+        exit(EXIT_FAILURE);
+    }
+
+    ssize_t bytes_written =
+        write(pager->file_descriptor, pager->pages[page_num], size);
+
+    if (bytes_written == -1) {
+        cout << "Error writing: " << errno << endl;
         exit(EXIT_FAILURE);
     }
 }
 //
+// Cursor func
+
+/*
+func: table_start
+desc: 创建一个指向表第一行的cursor
+ret: 指向表开头的cursor
+*/
+Cursor* table_start(Table* table) {
+    Cursor* cursor = (Cursor*)malloc(sizeof(Cursor));
+    cursor->table = table;
+    cursor->row_num = 0;
+    cursor->end_of_table = false;
+
+    return cursor;
+}
+
+/*
+func: table_end
+desc: 创建一个指向表待插入行(最后一个有效行的后一行)的cursor
+ret: 指向表结尾的cursor
+*/
+Cursor* table_end(Table* table){
+    Cursor* cursor=(Cursor*)malloc(sizeof(Cursor));
+    cursor->table=table;
+    cursor->row_num=table->num_rows;
+    cursor->end_of_table=true;
+
+    return cursor;
+}
+
+/*
+func: cursor_value
+desc: 根据cursor指向的行，返回指向该行的内存地址的指针
+ret: 指向cursor->row_num对应的行的指针
+*/
+void* cursor_value(Cursor* cursor){
+    uint32_t row_num=cursor->row_num;
+    uint32_t page_num=row_num/ROWS_PER_PAGE; //该行对应的页下标
+    void* page=get_page(cursor->table->pager,page_num); //获取该页的内存地址
+
+    uint32_t row_offset=row_num%ROWS_PER_PAGE; //行在页内的偏移下标
+    uint32_t byte_offset=row_offset*ROW_SIZE; //行偏移对应的字节偏移量
+
+    return (byte* )page+byte_offset;
+}
+
+/*
+func: cursor_advance
+desc: 将cursor移动到下一行,如果到达最后一行就 end_of_table=true
+*/
+void cursor_advance(Cursor* cursor){
+    cursor->row_num+=1;
+    if (cursor->row_num>=cursor->table->num_rows)
+        cursor->end_of_table=true;
+}
+
 // func region END

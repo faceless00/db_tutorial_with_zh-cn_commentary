@@ -36,4 +36,11 @@ typedef struct {
     Pager* pager;
 } Table;
 
+// Cursor
+typedef struct {
+    Table* table;
+    uint32_t row_num;
+    bool end_of_table;  //表示最后一个元素之后的位置
+} Cursor;
+
 // END
