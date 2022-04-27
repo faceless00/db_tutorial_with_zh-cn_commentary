@@ -2,6 +2,7 @@
 #define DEF_DEF 1
 //
 #define byte u_char
+#define cuint32 const uint32_t
 //
 
 // Row struct def
