@@ -38,15 +38,17 @@ Table* db_open(const char* filename);
 void db_close(Table* table);
 void* get_page(Pager* pager, uint32_t page_num);
 void pager_flush(Pager* pager, uint32_t page_num);
+uint32_t get_unused_page_num(Pager* pager);
 /* cursor */
 Cursor* table_start(Table* table);
 Cursor* table_end(Table* table);
-Cursor* table_find(Table* table,uint32_t key);
+Cursor* table_find(Table* table, uint32_t key);
 void* cursor_value(Cursor* cursor);
 void cursor_advance(Cursor* cursor);
 
-/* leaf node field locate & leaf node init */
+/*************** NODE OPERATION ***************/
 
+/*************** LEAF NODE ***************/
 uint32_t* leaf_node_num_cells(void* node);
 void* leaf_node_cell(void* node, uint32_t cell_num);
 uint32_t* leaf_node_key(void* node, uint32_t cell_num);
@@ -54,13 +56,18 @@ void* leaf_node_value(void* node, uint32_t cell_num);
 void initialize_leaf_node(void* node);
 // about insert
 void leaf_node_insert(Cursor* cursor, uint32_t key, Row* value);
-Cursor* leaf_node_find(Table* table,uint32_t page_num,uint32_t key);
-//
+// get loc correspond to key in node
+Cursor* leaf_node_find(Table* table, uint32_t page_num, uint32_t key);
+// split
+void leaf_node_split_and_insert(Cursor* cursor, uint32_t key, Row* value);
 
+/*************** ROOT NDOE ***************/
+bool is_node_root(void* page);
+void create_new_root(Table* table,uint32_t page_num);
 /*************** node field ***************/
 
 NodeType get_node_type(void* node);
-void set_node_type(void* node,NodeType type);
+void set_node_type(void* node, NodeType type);
 
 // Main func
 int main(int argc, char* argv[]) {
@@ -116,7 +123,7 @@ int main(int argc, char* argv[]) {
                 cout << "Error: Table full." << endl;
                 break;
             case (EXECUTE_DUPLICATE_KEY):
-                cout<<"Error: Duplicate key."<<endl;
+                cout << "Error: Duplicate key." << endl;
                 break;
             default:
                 cout << "Unrecognized Error." << endl;
@@ -272,18 +279,16 @@ ret: 操作成功与否
 */
 ExecuteResult execute_insert(Statement* statement, Table* table) {
     void* node = get_page(table->pager, table->root_page_num);  // 获取根节点
-    cuint32 num_cells=*(leaf_node_num_cells(node));
-    if (num_cells >= LEAF_NODE_MAX_CELLS)
-        return EXECUTE_TABLE_FULL;
+    cuint32 num_cells = *(leaf_node_num_cells(node));
 
     Row* row_to_insert = &(statement->row_to_insert);
-    uint32_t key_to_insert=row_to_insert->id;
-    Cursor* cursor=table_find(table,key_to_insert);
+    uint32_t key_to_insert = row_to_insert->id;
+    Cursor* cursor = table_find(table, key_to_insert);
 
-    if (cursor->cell_num<num_cells){
-    // 如果cell_num>=num_cells,说明在末尾插入,不需要判断(因为末尾都没有元素)
-        uint32_t key_at_index=*(leaf_node_key(node,cursor->cell_num));
-        if (key_at_index==key_to_insert)
+    if (cursor->cell_num < num_cells) {
+        // 如果cell_num>=num_cells,说明在末尾插入,不需要判断(因为末尾都没有元素)
+        uint32_t key_at_index = *(leaf_node_key(node, cursor->cell_num));
+        if (key_at_index == key_to_insert)
             return EXECUTE_DUPLICATE_KEY;
     }
     leaf_node_insert(cursor, row_to_insert->id, row_to_insert);
@@ -459,7 +464,14 @@ void pager_flush(Pager* pager, uint32_t page_num) {
         exit(EXIT_FAILURE);
     }
 }
-//
+
+/*
+func: get_unused_page_num
+param: pager
+desc: 获取一个未使用过的页
+ret: 页的下标
+*/
+uint32_t get_unused_page_num(Pager* pager) { return 0; }
 
 /*************** Cursor func ***************/
 
@@ -508,14 +520,14 @@ desc: return the pos of the given key,
 if key is not present,ret the pos where it should be inserted.
 ret: 指向该位置的cursor指针
 */
-Cursor* table_find(Table* table,uint32_t key){
-    uint32_t root_page_num=table->root_page_num;
-    void* root_node=get_page(table->pager,root_page_num);
+Cursor* table_find(Table* table, uint32_t key) {
+    uint32_t root_page_num = table->root_page_num;
+    void* root_node = get_page(table->pager, root_page_num);
 
-    if (get_node_type(root_node)==NODE_LEAF)
-        return leaf_node_find(table,root_page_num,key);
-    else{
-        cout<<"Need to implement searching an internal node"<<endl;
+    if (get_node_type(root_node) == NODE_LEAF)
+        return leaf_node_find(table, root_page_num, key);
+    else {
+        cout << "Need to implement searching an internal node" << endl;
         exit(EXIT_FAILURE);
     }
 }
@@ -591,7 +603,7 @@ desc: 初始化一个叶子节点,cell数量为0,type为leaf
 ret: none
 */
 void initialize_leaf_node(void* node) {
-    set_node_type(node,NODE_LEAF);
+    set_node_type(node, NODE_LEAF);
     *(leaf_node_num_cells(node)) = 0;
 }
 /*
@@ -605,9 +617,9 @@ void leaf_node_insert(Cursor* cursor, uint32_t key, Row* value) {
 
     uint32_t num_cells = *leaf_node_num_cells(node);
     if (num_cells >= LEAF_NODE_MAX_CELLS) {
-        // node full,节点已满
-        cout << "Need to implement splitting a leaf node." << endl;
-        exit(EXIT_FAILURE);
+        // 分裂叶子节点
+        leaf_node_split_and_insert(cursor, key, value);
+        return;
     }
 
     if (cursor->cell_num < num_cells) {
@@ -619,7 +631,7 @@ void leaf_node_insert(Cursor* cursor, uint32_t key, Row* value) {
     }
     // now space of cell_num is empty
     *(leaf_node_num_cells(node)) += 1;
-    //assign key&value
+    // assign key&value
     *(leaf_node_key(node, cursor->cell_num)) = key;
     serialize_row(value, leaf_node_value(node, cursor->cell_num));
 }
@@ -629,37 +641,99 @@ param: page_num-下标 key
 desc: 根据key值搜索cell,找不到就返回插入的位置
 ret: 指向cell位置的cursor
 */
-Cursor* leaf_node_find(Table* table,uint32_t page_num,uint32_t key){
-    void* node=get_page(table->pager,page_num);
-    uint32_t num_cells=*(leaf_node_num_cells(node));
+Cursor* leaf_node_find(Table* table, uint32_t page_num, uint32_t key) {
+    void* node = get_page(table->pager, page_num);
+    uint32_t num_cells = *(leaf_node_num_cells(node));
 
-    Cursor* cursor=(Cursor* )malloc(sizeof(cursor));
-    cursor->table=table;
-    cursor->page_num=page_num;
+    Cursor* cursor = (Cursor*)malloc(sizeof(cursor));
+    cursor->table = table;
+    cursor->page_num = page_num;
 
     // Binary search
-    uint32_t min_cell_index=0;
+    uint32_t min_cell_index = 0;
     // cell的最大下标+1
-    uint32_t one_past_max_index=num_cells;
+    uint32_t one_past_max_index = num_cells;
     // cellNum_Range= [min_c_index,one_p_m_index)
-    while(min_cell_index < one_past_max_index){
-        uint32_t mid_cell_index=(min_cell_index+one_past_max_index)/2;
-        uint32_t mid_cell_key=*(leaf_node_key(node,mid_cell_index));
-        if (key==mid_cell_key){
-            cursor->cell_num=mid_cell_index;;
+    while (min_cell_index < one_past_max_index) {
+        uint32_t mid_cell_index = (min_cell_index + one_past_max_index) / 2;
+        uint32_t mid_cell_key = *(leaf_node_key(node, mid_cell_index));
+        if (key == mid_cell_key) {
+            cursor->cell_num = mid_cell_index;
+            ;
             return cursor;
-        }else if (key<mid_cell_key){
-            //shrink right range to mid [l,mid-1]
-            one_past_max_index=mid_cell_index;
-        }else{  //key>mid
-            //shrink left [mid+1,r)
-            min_cell_index=mid_cell_index+1;
+        } else if (key < mid_cell_key) {
+            // shrink right range to mid [l,mid-1]
+            one_past_max_index = mid_cell_index;
+        } else {  // key>mid
+            // shrink left [mid+1,r)
+            min_cell_index = mid_cell_index + 1;
         }
     }
     // cant find key,so min_cell_index=one_past_max_inde
     // and this is where to insert new key
-    cursor->cell_num=min_cell_index;
+    cursor->cell_num = min_cell_index;
     return cursor;
+}
+
+/*
+func: leaf_node_split_and_insert
+param: cursor key-待插入cell的键 row
+desc: 分裂叶子节点
+ret: none
+*/
+void leaf_node_split_and_insert(Cursor* cursor, uint32_t key, Row* value) {
+    /*
+    创建一个新的节点，移入一半记录(cell).
+    把新的cell插入其中一个节点.
+    更新父节点或者创建一个新的父节点.
+    */
+    void* old_node = get_page(cursor->table->pager, cursor->page_num);
+    uint32_t new_page_num = get_unused_page_num(cursor->table->pager);
+    void* new_node = get_page(cursor->table->pager, new_page_num);
+    initialize_leaf_node(new_node);
+    /*
+    所有已有的key外加新的key应该被均匀分割成两部分 - 旧节点(左边) 新节点(右边)
+    从右向左,把每个key移动到正确的位置.
+    需要移动LEAF_NODE_MAX_CELLS+1次,因为还要插入新cell
+    [0,LEFT_COUNT-1]之间的放到旧节点
+    [LEFT_COUNT,MAX_CELL-1]+新插入的cell 放到新节点
+    */
+    for (uint32_t i = LEAF_NODE_MAX_CELLS; i >= 0; i--) {
+        void* destination_node;  //下标为i的cell应该放入的节点
+        if (i >= LEAF_NODE_LEFT_SPLIT_COUNT)  //放到右边新叶子(包括新的cell)
+            destination_node = new_node;
+        else  //左边的旧叶子
+            destination_node = old_node;
+        
+        // cell在目标节点的下标
+        uint32_t index_within_node = i % LEAF_NODE_LEFT_SPLIT_COUNT;
+        void* destination = leaf_node_cell(destination_node, index_within_node);
+
+        /*
+        cursor->cell_num是待插入cell的下标
+        当i>LEFT_SPILIT_COUNT的时候,i为原cell下标+1
+        i==COUNT,i是插入cell在新节点的下标(即0)
+        当i<COUNT,i就是原cell下标
+        */
+        if (i == cursor->cell_num)  //待插入的cell,需要进行一次序列化
+            serialize_row(value, destination);
+        else if (i > cursor->cell_num)  //移入右边新叶子
+            memcpy(destination, leaf_node_cell(old_node, i - 1),
+                   LEAF_NODE_CELL_SIZE);
+        else  //左边旧叶子(但我觉得其实不用移动吧...)
+            memcpy(destination, leaf_node_cell(old_node, i),
+                   LEAF_NODE_CELL_SIZE);
+    }
+    //更新分裂的node头部的cell数量
+    *(leaf_node_num_cells(old_node)) = LEAF_NODE_LEFT_SPLIT_COUNT;
+    *(leaf_node_num_cells(new_node)) = LEAF_NODE_LEFT_SPLIT_COUNT + 1;
+
+    if (is_node_root(old_node)){
+        return create_new_root(cursor->table,new_page_num);
+    }else {
+        cout<<"Need to implement updating parent after split"<<endl;
+        exit(EXIT_FAILURE);
+    }
 }
 
 /*************** node ***************/
@@ -670,8 +744,8 @@ param: void* node
 desc: 获取node的类型
 ret: internal | leaf
 */
-NodeType get_node_type(void* node){
-    uint8_t value=*((uint8_t* )((byte* )node+NODE_TYPE_OFFSET));
+NodeType get_node_type(void* node) {
+    uint8_t value = *((uint8_t*)((byte*)node + NODE_TYPE_OFFSET));
     return (NodeType)value;
 }
 /*
@@ -680,8 +754,8 @@ param: node type
 desc: set node's type to param type
 ret: none
 */
-void set_node_type(void* node,NodeType type){
-    uint8_t value=type;
-    *((uint8_t* )((byte* )node+NODE_TYPE_OFFSET))=value;
+void set_node_type(void* node, NodeType type) {
+    uint8_t value = type;
+    *((uint8_t*)((byte*)node + NODE_TYPE_OFFSET)) = value;
 }
 // func region END
