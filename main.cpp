@@ -11,15 +11,20 @@
 using namespace std;
 
 /*************** HANDLE INPUT ***************/
+
 InputBuffer* new_input_buffer();
 void print_prompt();
 void read_input(InputBuffer* input_buffer);
 void close_input_buffer(InputBuffer* input_buffer);
+
 /*************** HANDLE STATEMENT ***************/
+
 PrepareResult prepare_statement(InputBuffer* input_buffer,
                                 Statement* statement);
 PrepareResult prepare_insert(InputBuffer* input_buffer, Statement* statement);
+
 /*************** ROW (DE)SERIALIZE & PRINT ***************/
+
 void serialize_row(Row* source,
                    void* destination);  //序列化数据，结构体->序列化紧凑数据
 void deserialize_row(void* source,
@@ -33,36 +38,44 @@ void indent(uint32_t level);
 void print_tree(Pager* pager, uint32_t page_num, uint32_t indentation_level);
 
 /*************** COMMAND ***************/
+
 MetaCommandResult do_meta_command(InputBuffer* input_buffer, Table* table);
 ExecuteResult execute_insert(Statement* statement, Table* table);
 ExecuteResult execute_select(Statement* statement, Table* table);
 ExecuteResult execute_statement(Statement* statement, Table* table);
+
 /*************** Pager ***************/
+
 Pager* pager_open(const char* filename);
 Table* db_open(const char* filename);
 void db_close(Table* table);
 void* get_page(Pager* pager, uint32_t page_num);
 void pager_flush(Pager* pager, uint32_t page_num);
 uint32_t get_unused_page_num(Pager* pager);
+
 /*************** Cursor ***************/
+
 Cursor* table_start(Table* table);
 Cursor* table_find(Table* table, uint32_t key);
 void* cursor_value(Cursor* cursor);
 void cursor_advance(Cursor* cursor);
+
 /*************** NODE OPERATION ***************/
 
 /********* LEAF NODE *********/
+
+// Field
 
 uint32_t* leaf_node_num_cells(void* node);
 void* leaf_node_cell(void* node, uint32_t cell_num);
 uint32_t* leaf_node_key(void* node, uint32_t cell_num);
 void* leaf_node_value(void* node, uint32_t cell_num);
+uint32_t* leaf_node_next_leaf(void* node);
+
+//
 void initialize_leaf_node(void* node);
-// about insert
 void leaf_node_insert(Cursor* cursor, uint32_t key, Row* value);
-// get loc correspond to key in node
 Cursor* leaf_node_find(Table* table, uint32_t page_num, uint32_t key);
-// split
 void leaf_node_split_and_insert(Cursor* cursor, uint32_t key, Row* value);
 
 /********* ROOT NODE *********/
@@ -374,10 +387,8 @@ ExecuteResult execute_select(Statement* statement, Table* table) {
     Row row;
     Cursor* cursor = table_start(table);
 
-    for (uint32_t i = 0;
-         i < *(leaf_node_num_cells(table->pager->pages[table->root_page_num]));
-         i++) {
-        deserialize_row(cursor_value(cursor), &row);
+    while (cursor->end_of_table!=true){
+        deserialize_row(cursor_value(cursor),&row);
         cursor_advance(cursor);
         print_row(&row);
     }
@@ -552,19 +563,15 @@ uint32_t get_unused_page_num(Pager* pager) { return pager->num_pages; }
 
 /*
 func: table_start
-desc: 创建一个指向表的根节点的第一个cell的cursor
+desc: 创建一个指向表的最左边叶子节点的开头的元素
 ret: 指向表开头的cursor
 */
 Cursor* table_start(Table* table) {
-    Cursor* cursor = (Cursor*)malloc(sizeof(Cursor));
-    cursor->table = table;
-    cursor->page_num = table->root_page_num;
-    cursor->cell_num = 0;
+    Cursor* cursor=table_find(table,0);
 
-    void* root_node = get_page(table->pager, table->root_page_num);
-    uint32_t num_cells = *(leaf_node_num_cells(root_node));
-    // 如果表的根节点的cell数量为0,那么表示cursor到达了table的末尾
-    cursor->end_of_table = (num_cells == 0);
+    void* node=get_page(table->pager,cursor->page_num);
+    uint32_t num_cells=*(leaf_node_num_cells(node));
+    cursor->end_of_table=(num_cells==0);
 
     return cursor;
 }
@@ -600,15 +607,23 @@ void* cursor_value(Cursor* cursor) {
 
 /*
 func: cursor_advance
-desc: 将cursor移动到下一行,如果到达最后一行就 end_of_table=true
+desc: 在叶子节点内,cursor指向下一行,如果到达叶子的末尾,跳向兄弟叶子或者到达终点.
 */
 void cursor_advance(Cursor* cursor) {
     cuint32 page_num = cursor->page_num;
     void* node = get_page(cursor->table->pager, page_num);
 
     cursor->cell_num += 1;
-    if (cursor->cell_num >= *(leaf_node_num_cells(node)))
-        cursor->end_of_table = true;
+    if (cursor->cell_num >= *(leaf_node_num_cells(node))){
+        uint32_t next_page_num=*(leaf_node_next_leaf(node));
+        if (next_page_num==0){
+            //This was rightmost leaf
+            cursor->end_of_table=true;
+        }else {
+            cursor->page_num=next_page_num;
+            cursor->cell_num=0;
+        }
+    }
 }
 
 /*************** LEAF NODE ***************/
@@ -641,6 +656,7 @@ ret: 指向该key值的int指针
 uint32_t* leaf_node_key(void* node, uint32_t cell_num) {
     return (uint32_t*)leaf_node_cell(node, cell_num);
 }
+
 /*
 func: leaf_node_value
 param: node cell_num
@@ -651,6 +667,17 @@ void* leaf_node_value(void* node, uint32_t cell_num) {
     return (void*)((byte*)leaf_node_cell(node, cell_num) +
                    LEAF_NODE_VALUE_OFFSET);
 }
+
+/*
+func: leaf_node_next_leaf
+param: node
+desc: 获得叶子节点右边的叶子节点的page number
+ret: 指向该page number的int指针
+*/
+uint32_t* leaf_node_next_leaf(void* node){
+    return (uint32_t* )((byte* )node+LEAF_NODE_NEXT_LEAF_OFFSET);
+}
+
 /*
 func: init_leaf_node
 desc: 初始化一个叶子节点,cell数量为0,type为leaf
@@ -660,7 +687,9 @@ void initialize_leaf_node(void* node) {
     set_node_type(node, NODE_LEAF);
     set_node_root(node, false);
     *(leaf_node_num_cells(node)) = 0;
+    *(leaf_node_next_leaf(node))=0; // 0 represents no sibling
 }
+
 /*
 func: leaf_node_insert
 param: cursor uint32_t value
@@ -777,7 +806,8 @@ void leaf_node_split_and_insert(Cursor* cursor, uint32_t key, Row* value) {
         cell_num就是待插入元素的下标
         */
         if (i == cursor->cell_num) {  //待插入的cell,需要进行一次序列化
-            serialize_row(value, destination);
+            *(leaf_node_key(destination_node,index_within_node))=key;
+            serialize_row(value, leaf_node_value(destination_node,index_within_node));
         } else if (i > cursor->cell_num) {
             memcpy(destination, leaf_node_cell(old_node, i - 1),
                    LEAF_NODE_CELL_SIZE);
@@ -786,9 +816,12 @@ void leaf_node_split_and_insert(Cursor* cursor, uint32_t key, Row* value) {
                    LEAF_NODE_CELL_SIZE);
         }
     }
-    //更新分裂的node头部的cell数量
+    //分裂后要更新一些字段
     *(leaf_node_num_cells(old_node)) = LEAF_NODE_LEFT_SPLIT_COUNT;
     *(leaf_node_num_cells(new_node)) = LEAF_NODE_RIGHT_SPLIT_COUNT;
+    //sibling
+    *(leaf_node_next_leaf(new_node))=*(leaf_node_next_leaf(old_node));
+    *(leaf_node_next_leaf(old_node))=new_page_num;//新叶子节点的页码
 
     if (is_node_root(old_node)) {
         return create_new_root(cursor->table, new_page_num);
