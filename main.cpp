@@ -46,7 +46,6 @@ void pager_flush(Pager* pager, uint32_t page_num);
 uint32_t get_unused_page_num(Pager* pager);
 /*************** Cursor ***************/
 Cursor* table_start(Table* table);
-Cursor* table_end(Table* table);
 Cursor* table_find(Table* table, uint32_t key);
 void* cursor_value(Cursor* cursor);
 void cursor_advance(Cursor* cursor);
@@ -80,6 +79,8 @@ uint32_t* internal_node_right_child(void* node);
 void* internal_node_cell(void* node, uint32_t cell_num);
 uint32_t* internal_node_child(void* node, uint32_t child_num);
 uint32_t* internal_node_key(void* node, uint32_t key_num);
+// find
+Cursor* internal_node_find(Table* table, uint32_t page_num, uint32_t key);
 
 /********* COMMOM NODE *********/
 
@@ -94,7 +95,7 @@ void test(Table* table) {
     char c1[] = "ppp";
     memcpy(&s1.row_to_insert.username, (void*)c1, sizeof(char) * 4);
     memcpy(&s1.row_to_insert.email, (void*)c1, sizeof(char) * 4);
-    for (uint32_t i = 0; i < LEAF_NODE_MAX_CELLS; i++) {
+    for (uint32_t i = 0; i < LEAF_NODE_MAX_CELLS+1; i++) {
         s1.row_to_insert.id = i + 1;
         execute_insert(&s1, table);
     }
@@ -210,7 +211,6 @@ MetaCommandResult do_meta_command(InputBuffer* input_buffer, Table* table) {
         print_tree(table->pager, 0, 0);
         return META_COMMAND_SUCCESS;
     } else if (strcmp(input_buffer->buffer, ".test") == 0) {
-        cout << "Insert 13 rows." << endl;
         test(table);
         return META_COMMAND_SUCCESS;
     } else {
@@ -333,7 +333,7 @@ void print_tree(Pager* pager, uint32_t page_num, uint32_t indentation_level) {
                 print_tree(pager, child, indentation_level + 1);
 
                 indent(indentation_level + 1);
-                cout << "- key " <<*(internal_node_key(node,i)) << endl;
+                cout << "- key " << *(internal_node_key(node, i)) << endl;
             }
             //打印最右边的子节点
             child = *internal_node_right_child(node);
@@ -351,15 +351,15 @@ desc: 根据ID在表中合适的位置插入(升序)
 ret: 操作成功与否
 */
 ExecuteResult execute_insert(Statement* statement, Table* table) {
-    void* node = get_page(table->pager, table->root_page_num);  // 获取根节点
-    cuint32 num_cells = *(leaf_node_num_cells(node));
-
     Row* row_to_insert = &(statement->row_to_insert);
     uint32_t key_to_insert = row_to_insert->id;
     Cursor* cursor = table_find(table, key_to_insert);
+    //获取cursor指向的node及相关变量
+    void* node=get_page(table->pager,cursor->page_num);
+    cuint32 num_cells=*(leaf_node_num_cells(node));
 
     if (cursor->cell_num < num_cells) {
-        // 如果cell_num>=num_cells,说明在末尾插入,不需要判断(因为末尾都没有元素)
+        // 如果cell_num>=num_cells,说明在末尾插入,不需要判断重复(key比叶子节点所有已有key都大)
         uint32_t key_at_index = *(leaf_node_key(node, cursor->cell_num));
         if (key_at_index == key_to_insert)
             return EXECUTE_DUPLICATE_KEY;
@@ -570,25 +570,6 @@ Cursor* table_start(Table* table) {
 }
 
 /*
-func: table_end
-desc:
-创建一个指向表的根节点的最后一个cell后一个cell位置的cursor(即page.num_cells)
-ret: 指向表最后一个cell的后一个cell的cursor
-*/
-Cursor* table_end(Table* table) {
-    Cursor* cursor = (Cursor*)malloc(sizeof(Cursor));
-    cursor->table = table;
-    cursor->page_num = table->root_page_num;
-
-    void* root_node = get_page(table->pager, table->root_page_num);
-    cuint32 num_cells = *(leaf_node_num_cells(root_node));
-    cursor->cell_num = num_cells;
-    cursor->end_of_table = true;
-
-    return cursor;
-}
-
-/*
 func: table_find
 param: table key
 desc: return the pos of the given key,
@@ -601,10 +582,8 @@ Cursor* table_find(Table* table, uint32_t key) {
 
     if (get_node_type(root_node) == NODE_LEAF)
         return leaf_node_find(table, root_page_num, key);
-    else {
-        cout << "Need to implement searching an internal node" << endl;
-        exit(EXIT_FAILURE);
-    }
+    else
+        return internal_node_find(table, root_page_num, key);
 }
 
 /*
@@ -854,7 +833,7 @@ uint32_t get_node_max_key(void* node) {
             return *(
                 internal_node_key(node, *(internal_node_num_keys(node) - 1)));
         case NODE_LEAF:
-            return *(leaf_node_key(node,*(leaf_node_num_cells(node))-1));
+            return *(leaf_node_key(node, *(leaf_node_num_cells(node)) - 1));
         default:
             cout << "UNRECOGNIZED NODE TYPE: " << get_node_type(node) << endl;
             exit(EXIT_FAILURE);
@@ -997,6 +976,37 @@ ret: 指向该key数据的int指针呢
 uint32_t* internal_node_key(void* node, uint32_t key_num) {
     return (uint32_t*)((byte*)internal_node_cell(node, key_num) +
                        INTERNAL_NODE_CHILD_SIZE);
+}
+
+Cursor* internal_node_find(Table* table, uint32_t page_num, uint32_t key) {
+    void* node = get_page(table->pager, page_num);
+    uint32_t num_keys = *(internal_node_num_keys(node));
+
+    //二分查找可能包含给定key的子节点的index
+    uint32_t min_index = 0;
+    uint32_t max_index = num_keys;  //子节点的数量=Num(key)+1
+
+    while (min_index != max_index) {  // [min,max)
+        uint32_t mid_index = (min_index + max_index) / 2;
+        uint32_t key_to_right = *(internal_node_key(node, mid_index));
+        if (key_to_right >= key)
+            max_index = mid_index;
+        else
+            min_index = mid_index + 1;
+    }
+
+    //退出循环时,min=max,就是第一个 >= 查找的key的key的下标,或者是maxKeyIndex(node)+1(即最右边孩子的下标)
+    uint32_t child_num = *(internal_node_child(node, min_index));
+    void* child = get_page(table->pager, child_num);
+    switch (get_node_type(child)) {
+        case NODE_LEAF:
+            return leaf_node_find(table, child_num, key);
+        case NODE_INTERNAL:
+            return internal_node_find(table, child_num, key);
+        default:
+            cout << "UNRECOGNIZED NODE TYPE: " << get_node_type(child) << endl;
+            exit(EXIT_FAILURE);
+    }
 }
 
 //
